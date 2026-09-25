@@ -5,6 +5,21 @@
  *
  * Purpose:
  *   Accept one generic memory command and perform one AXI4 burst.
+ *
+ * This module contains:
+ *   - AXI4 master interface
+ *   - command storage
+ *   - AXI write burst control
+ *   - AXI read burst control
+ *   - response/error checking
+ *
+ * This module does NOT contain:
+ *   - packet counters
+ *   - Packet A / Packet B
+ *   - frame logic
+ *   - test data generation
+ *   - read-data comparison
+ *   - scheduler policy
  */
 
 module ddr_axi_controller #(
@@ -264,9 +279,8 @@ module ddr_axi_controller #(
     assign M_AXI_AWADDR =
         active_addr;
 
-    assign M_AXI_AWLEN = 
-        active_len[7:0] - 8'd1;
-    
+    /*
+     * AXI4:AXI_SIZE
     assign M_AXI_AWSIZE =
         AXI_SIZE;
 
@@ -295,7 +309,8 @@ module ddr_axi_controller #(
      */
     assign M_AXI_AWVALID =
         (state == S_WRITE) &&
-        !aw_done;
+        !aw_done &&
+        init_calib_complete;
 
 
     // ============================================================
@@ -318,7 +333,8 @@ module ddr_axi_controller #(
     assign M_AXI_WVALID =
         (state == S_WRITE) &&
         !w_done &&
-        wr_valid;
+        wr_valid &&
+        init_calib_complete;
 
 
     /*
@@ -339,7 +355,8 @@ module ddr_axi_controller #(
     assign wr_ready =
         (state == S_WRITE) &&
         !w_done &&
-        M_AXI_WREADY;
+        M_AXI_WREADY &&
+        init_calib_complete;
 
 
     // ============================================================
@@ -347,7 +364,8 @@ module ddr_axi_controller #(
     // ============================================================
 
     assign M_AXI_BREADY =
-        (state == S_WRITE_RESP);
+        (state == S_WRITE_RESP) &&
+        init_calib_complete;
 
 
     // ============================================================
@@ -383,7 +401,8 @@ module ddr_axi_controller #(
 
 
     assign M_AXI_ARVALID =
-        (state == S_READ_ADDR);
+        (state == S_READ_ADDR) &&
+        init_calib_complete;
 
 
     // ============================================================
@@ -395,7 +414,8 @@ module ddr_axi_controller #(
 
     assign rd_valid =
         (state == S_READ_DATA) &&
-        M_AXI_RVALID;
+        M_AXI_RVALID &&
+        init_calib_complete;
 
     assign rd_last =
         (state == S_READ_DATA) &&
@@ -409,7 +429,8 @@ module ddr_axi_controller #(
      */
     assign M_AXI_RREADY =
         (state == S_READ_DATA) &&
-        rd_ready;
+        rd_ready &&
+        init_calib_complete;
 
 
     // ============================================================
