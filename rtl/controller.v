@@ -177,6 +177,14 @@ module ddr_axi_controller #(
     reg aw_done;
     reg w_done;
 
+    // Registered AXI write-data channel
+    reg [C_M_AXI_DATA_WIDTH-1:0] axi_wdata;
+    reg                          axi_wvalid;
+    reg                          axi_wlast;
+
+    // Number of beats accepted from the upstream wr_* interface
+    reg [8:0] wr_load_count;
+
 
     // ============================================================
     // Command validation
@@ -235,6 +243,9 @@ module ddr_axi_controller #(
 
     wire w_handshake =
         M_AXI_WVALID && M_AXI_WREADY;
+
+    wire wr_handshake =
+        wr_valid && wr_ready;
 
     wire b_handshake =
         M_AXI_BVALID && M_AXI_BREADY;
@@ -302,44 +313,27 @@ module ddr_axi_controller #(
     // AXI write-data channel
     // ============================================================
 
-    assign M_AXI_WDATA =
-        wr_data;
+    assign M_AXI_WDATA  = axi_wdata;
 
     assign M_AXI_WSTRB =
         {(C_M_AXI_DATA_WIDTH/8){1'b1}};
 
+    assign M_AXI_WVALID = axi_wvalid;
 
-    /*
-     * WVALID is independent of AWREADY.
-     *
-     * This allows the write address and write data channels
-     * to operate independently, as required by AXI.
-     */
-    assign M_AXI_WVALID =
-        (state == S_WRITE) &&
-        !w_done &&
-        wr_valid;
+    assign M_AXI_WLAST  = axi_wlast;
 
 
-    /*
-     * Controller generates WLAST from the commanded burst
-     * length.
-     */
-    assign M_AXI_WLAST =
-        (state == S_WRITE) &&
-        !w_done &&
-        wr_valid &&
-        expected_last_beat;
-
-
-    /*
-     * Backpressure from MIG propagates to the upstream
-     * write-data producer.
-     */
+    // Upstream may provide a new beat when:
+    //
+    // 1. We are writing
+    // 2. We still need more beats
+    // 3. The AXI buffer is empty OR the current AXI beat
+    //    is being accepted this cycle
     assign wr_ready =
         (state == S_WRITE) &&
         !w_done &&
-        M_AXI_WREADY;
+        (wr_load_count < active_len) &&
+        (!axi_wvalid || M_AXI_WREADY);
 
 
     // ============================================================
@@ -454,6 +448,12 @@ module ddr_axi_controller #(
             cmd_done   <= 1'b0;
             error      <= 1'b0;
 
+            wr_load_count <= 9'd0;
+
+            axi_wdata  <= {C_M_AXI_DATA_WIDTH{1'b0}};
+            axi_wvalid <= 1'b0;
+            axi_wlast  <= 1'b0;
+
         end
         else begin
 
@@ -472,6 +472,11 @@ module ddr_axi_controller #(
 
                 aw_done    <= 1'b0;
                 w_done     <= 1'b0;
+
+                wr_load_count <= 9'd0;
+
+                axi_wvalid <= 1'b0;
+                axi_wlast  <= 1'b0;
 
             end
             else begin
@@ -508,6 +513,10 @@ module ddr_axi_controller #(
                     S_IDLE: begin
 
                         beat_count <= 9'd0;
+                        wr_load_count <= 9'd0;
+
+                        axi_wvalid <= 1'b0;
+                        axi_wlast  <= 1'b0;
 
                         if (cmd_valid && cmd_ready) begin
 
@@ -557,18 +566,41 @@ module ddr_axi_controller #(
                             aw_done <= 1'b1;
 
 
+                        // ------------------------------------------------
+                        // AXI accepted the currently buffered beat
+                        // ------------------------------------------------
                         if (w_handshake) begin
 
-                            if (expected_last_beat) begin
-
+                            if (axi_wlast) begin
                                 w_done <= 1'b1;
-
                             end
                             else begin
-
                                 beat_count <= beat_count + 9'd1;
-
                             end
+
+                            // If we don't simultaneously receive a new
+                            // upstream beat, the AXI buffer becomes empty.
+                            if (!wr_handshake) begin
+                                axi_wvalid <= 1'b0;
+                                axi_wlast  <= 1'b0;
+                            end
+
+                        end
+
+
+                        // ------------------------------------------------
+                        // Accept a new upstream write beat
+                        // ------------------------------------------------
+                        if (wr_handshake) begin
+
+                            axi_wdata  <= wr_data;
+                            axi_wvalid <= 1'b1;
+
+                            // Mark the final beat when loading it
+                            axi_wlast <=
+                                (wr_load_count == (active_len - 9'd1));
+
+                            wr_load_count <= wr_load_count + 9'd1;
 
                         end
 
@@ -583,11 +615,10 @@ module ddr_axi_controller #(
                         if (
                             (aw_done || aw_handshake) &&
                             (w_done ||
-                             (w_handshake && expected_last_beat))
+                            (w_handshake && axi_wlast))
                         ) begin
 
                             state <= S_WRITE_RESP;
-
                         end
 
                     end
